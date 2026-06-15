@@ -20,27 +20,37 @@ REM Run the VAE on CPU too (we have no usable GPU).
 set ACESTEP_VAE_ON_CPU=1
 
 if not exist "node_modules" (
-    echo Error: UI dependencies not installed! Run setup.bat first.
+    echo Error: UI dependencies not installed! Run install-cpu.bat first.
     pause
     exit /b 1
 )
 if not exist "server\node_modules" (
-    echo Error: Server dependencies not installed! Run setup.bat first.
+    echo Error: Server dependencies not installed! Run install-cpu.bat first.
     pause
     exit /b 1
 )
 
-if "%ACESTEP_PATH%"=="" (
-    set ACESTEP_PATH=..\ACE-Step-1.5
-)
+REM --- Resolve ACE-Step engine path to an ABSOLUTE path ---
+REM A relative path resolves differently for the API window (UI root) and the
+REM backend window (the server\ folder), which breaks the Python fallback with
+REM a spawn ...\env\Scripts\python.exe ENOENT error. Absolute path fixes that.
+if not "%ACESTEP_PATH%"=="" goto :have_acestep
+pushd "%~dp0.."
+set "ACESTEP_BASE=%CD%"
+popd
+set "ACESTEP_PATH=%ACESTEP_BASE%\ACE-Step-1.5"
+:have_acestep
+
 if not exist "%ACESTEP_PATH%" (
     echo.
-    echo Warning: ACE-Step not found at %ACESTEP_PATH%
-    echo Set ACESTEP_PATH or put ACE-Step-1.5 next to ace-step-ui.
+    echo Warning: ACE-Step engine not found at %ACESTEP_PATH%
+    echo Run install-cpu.bat first, or set ACESTEP_PATH to the engine folder.
     echo Example: set ACESTEP_PATH=C:\ACE-Step-1.5
     pause
     exit /b 1
 )
+
+echo [+] Engine: %ACESTEP_PATH%
 
 set API_COMMAND=
 if exist "%ACESTEP_PATH%\python_embeded\python.exe" (
@@ -52,8 +62,9 @@ if exist "%ACESTEP_PATH%\python_embeded\python.exe" (
 )
 
 echo.
-echo   NOTE: CPU generation is slow - a single track may take several minutes.
-echo   This is expected.
+echo   NOTE: CPU generation is slow. Loading the model in the API window can take
+echo   several minutes. WAIT until that window says it is listening on port 8001
+echo   BEFORE you press Create in the browser. The first track also takes a while.
 echo.
 
 REM Environment variables set above are inherited by child windows.
