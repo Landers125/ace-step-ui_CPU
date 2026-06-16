@@ -1,19 +1,26 @@
-# 🎵 ACE-Step UI — Kaggle (GPU P100 / 2×T4)
+# 🎵 ACE-Step UI — Kaggle (GPU P100)
 
 Запуск **ace-step-ui** на бесплатном GPU Kaggle. Главное отличие от Colab: у Kaggle **~29 ГБ RAM** (против 12 ГБ), поэтому большая модель **XL (4B)** грузится без OOM и без патчей движка.
+
+## 🖥️ Какую GPU выбрать — **P100**
+- Движок работает на **одной** GPU (без мультиGPU-шардинга), поэтому в режиме **T4 x2 вторая карта простаивает** — толку от двух T4 нет.
+- P100 (16 ГБ, ~732 ГБ/с) против одной T4 (16 ГБ, ~320 ГБ/с): диффузия упирается в пропускную способность памяти, у P100 она вдвое выше → генерация быстрее.
+- 16 ГБ VRAM хватает: XL в fp16 занимает ~10 ГБ.
 
 ## Подготовка (один раз)
 1. Нужен аккаунт Kaggle с **подтверждённым телефоном** — иначе не включить Интернет и GPU.
 2. **Create → New Notebook**.
-3. Панель справа → **Settings → Accelerator → GPU P100** (рекомендуется; либо «GPU T4 x2»).
+3. Панель справа → **Settings → Accelerator → GPU P100**.
 4. **Settings → Internet → On** (обязательно).
 5. Вставляйте ячейки ниже по порядку и выполняйте сверху вниз (Shift+Enter).
 6. В конце откройте публичную ссылку `*.trycloudflare.com`.
 
 ## 🎯 Выбор модели (ячейка 6, переменная `DIT_MODEL`)
-- `acestep-v15-turbo` — 2B, быстрая (8 шагов), качается автоматически.
-- `acestep-v15-xl-turbo` — **XL 4B, макс. качество при 8 шагах** (на Kaggle реально).
+- `acestep-v15-turbo` — 2B, быстрая (8 шагов), качается автоматически, влезает и в /kaggle/working.
+- `acestep-v15-xl-turbo` — **XL 4B, макс. качество при 8 шагах**.
 - `acestep-v15-xl-sft` — XL 4B, 50 шагов + CFG (абсолютный максимум, медленно).
+
+> ⚠️ **Важно про диск:** `/kaggle/working` ограничена ~20 ГБ (Output). Веса XL (~20 ГБ) туда не влезают, поэтому ячейка 6 качает их в `/kaggle/temp` (scratch ~50–60 ГБ) и подключает через симлинк.
 
 ---
 
@@ -42,10 +49,8 @@
 !pip install -q "transformers>=4.51.0,<4.58.0" "diffusers>=0.37.0" "accelerate>=1.12.0" "soundfile>=0.13.1" loguru einops scipy "vector-quantize-pytorch>=1.27.15" diskcache numba pytorch-wavelets pywavelets toml modelscope matplotlib librosa soxr
 import torch, transformers; print('torch', torch.__version__, '| CUDA:', torch.cuda.is_available(), '| transformers', transformers.__version__)
 ```
-> Если показано `CUDA: False`, выполните один раз:
-> ```python
-> !pip install -q --force-reinstall torch torchaudio --index-url https://download.pytorch.org/whl/cu121
-> ```
+> Предупреждения pip про `lightning`/`gradio`/`torchao`/RAPIDS — нормально (мы ставим движок с `--no-deps`). Главное — `CUDA: True`.
+> Если `CUDA: False`, выполните один раз: `!pip install -q --force-reinstall torch torchaudio --index-url https://download.pytorch.org/whl/cu121`
 
 ### 3) Зависимости интерфейса
 ```python
@@ -88,11 +93,28 @@ for _ in range(40):
 print('PUBLIC URL:', url or 'see /kaggle/working/cf.log')
 ```
 
-### 6) Выбор и скачивание модели
+### 6) Выбор и скачивание модели (веса XL → /kaggle/temp через симлинк)
 ```python
-import os, subprocess, sys
-DIT_MODEL = 'acestep-v15-xl-turbo'   # или 'acestep-v15-turbo' (2B, быстрее)
-CKPT_DIR = '/kaggle/working/ACE-Step-1.5/checkpoints'; os.makedirs(CKPT_DIR, exist_ok=True)
+import os, shutil, subprocess, sys
+DIT_MODEL = 'acestep-v15-xl-turbo'   # или 'acestep-v15-turbo' (2B — маленькая)
+
+# 1) чистим возможную оборванную докачку из /kaggle/working (лимит ~20 ГБ)
+shutil.rmtree('/kaggle/working/ACE-Step-1.5/checkpoints', ignore_errors=True)
+
+# 2) большие веса держим в /kaggle/temp (~50–60 ГБ), в движок кладём симлинк
+SCRATCH = '/kaggle/temp/checkpoints'; os.makedirs(SCRATCH, exist_ok=True)
+LINK = '/kaggle/working/ACE-Step-1.5/checkpoints'
+if os.path.islink(LINK):
+    os.remove(LINK)
+elif os.path.exists(LINK):
+    shutil.rmtree(LINK)
+os.symlink(SCRATCH, LINK)
+print('checkpoints ->', os.path.realpath(LINK))
+
+# 3) свободное место в scratch (для XL нужно ~21 ГБ)
+_t,_u,_f = shutil.disk_usage('/kaggle/temp'); print('scratch free: %.1f GB' % (_f/1e9))
+
+# 4) качаем веса
 XL_REPOS = {
   'acestep-v15-xl-turbo': 'ACE-Step/acestep-v15-xl-turbo',
   'acestep-v15-xl-base':  'ACE-Step/acestep-v15-xl-base',
@@ -101,8 +123,9 @@ XL_REPOS = {
 if DIT_MODEL in XL_REPOS:
     subprocess.run([sys.executable,'-m','pip','install','-q','-U','huggingface_hub[hf_xet]','hf_xet'], check=False)
     from huggingface_hub import snapshot_download
-    dest = os.path.join(CKPT_DIR, DIT_MODEL)
-    print('Скачиваю', XL_REPOS[DIT_MODEL]); snapshot_download(repo_id=XL_REPOS[DIT_MODEL], local_dir=dest, max_workers=4)
+    dest = os.path.join(LINK, DIT_MODEL)
+    print('Скачиваю', XL_REPOS[DIT_MODEL], '->', os.path.realpath(dest))
+    snapshot_download(repo_id=XL_REPOS[DIT_MODEL], local_dir=dest, max_workers=4)
     subprocess.run([sys.executable,'-m','pip','install','-q','huggingface_hub>=0.34.0,<1.0'], check=False)
     print('Готово, файлов:', len(os.listdir(dest)))
 else:
@@ -149,8 +172,8 @@ print('Треки складываются в', OUT_DIR, '— скачать ч�
 
 ## ✅ Готово
 - Откройте ссылку `https://....trycloudflare.com` из ячейки 5/7.
-- XL качает ~20 ГБ весов при первом запуске (разово); на ~29 ГБ RAM грузится без OOM.
-- На P100/T4 (16 ГБ VRAM) для XL держите **Batch Size = 1**, длительность 30–120 сек.
+- XL качает ~20 ГБ весов при первом запуске; на ~29 ГБ RAM грузится без OOM.
+- На P100 (16 ГБ VRAM) для XL держите **Batch Size = 1**, длительность 30–120 сек.
 - Готовые треки: `/kaggle/working/ACE-Step-Output/ГГГГ-ММ-ДД` — скачиваются через панель Output.
 - Логи генерации: `!tail -n 60 /kaggle/working/backend.log`.
-- ⚠️ После остановки сессии `/kaggle/working` может очиститься — скачивайте треки или жмите **Save Version**.
+- ⚠️ Веса XL лежат в `/kaggle/temp` (scratch, не входит в лимит Output), но **он очищается при завершении сессии** — XL придётся качать заново при каждом новом запуске (либо сохраните их в приватный Kaggle Dataset).
