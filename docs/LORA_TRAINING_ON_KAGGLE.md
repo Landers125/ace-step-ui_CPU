@@ -82,7 +82,7 @@ time.sleep(5)
 
 ## 3. Датасет (свои оригинальные треки)
 
-Положи файлы в `/kaggle/temp/dataset/` (или загрузи как Kaggle Dataset и подключи):
+Положи файлы в `/kaggle/temp/dataset/` (или загрузи как Kaggle Dataset и подключи — см. раздел 8):
 ```
 dataset/
 ├── song1.mp3            # аудио (лучше обрезать до 15–30 сек)
@@ -117,7 +117,7 @@ dataset/
 Выбери любой способ:
 - **Простой:** сохраняй в `/kaggle/working/lokr_output` → после остановки ноутбука файлы останутся в Output, скачаешь их из вкладки Data/Output.
 - **Скачать сразу:** через файл-менеджер студии или `from IPython.display import FileLink; FileLink('/kaggle/working/lokr_output/...')`.
-- **В облако:** залей на HuggingFace (`huggingface_hub.upload_folder`) или сохрани как новый Kaggle Dataset.
+- **В облако:** залей на HuggingFace (`huggingface_hub.upload_folder`) или сохрани как новый Kaggle Dataset (раздел 8).
 
 ---
 
@@ -140,9 +140,48 @@ subprocess.Popen(['python','app.py','--port','7860'])
 
 ---
 
+## 8. 🔌 Kaggle API: загрузка датасета и сохранение LoRA
+
+Чтобы не перезаливать треки вручную каждую сессию и не терять обученную LoRA, удобно использовать Kaggle API.
+
+### Установка и ключ
+1. Kaggle → **Settings / Account → API → Create New Token** → скачается `kaggle.json`.
+2. На СВОЁМ ПК положи его в `~/.kaggle/kaggle.json` (Windows: `C:\Users\<имя>\.kaggle\kaggle.json`).
+```bash
+pip install kaggle
+```
+
+### Загрузить свои треки как приватный датасет (1 раз)
+```bash
+mkdir my_tracks && cp /путь/к/трекам/* my_tracks/
+kaggle datasets init -p my_tracks            # создаст dataset-metadata.json
+# в dataset-metadata.json отредактируй title и id: "<username>/ace-lora-tracks"
+kaggle datasets create -p my_tracks          # первая загрузка (по умолчанию приватный)
+# обновления потом:
+kaggle datasets version -p my_tracks -m "update tracks"
+```
+В ноутбуке: **Add Input** → найди свой датасет → подключится в `/kaggle/input/ace-lora-tracks/`.
+
+### Сохранить обученную LoRA как датасет
+```bash
+kaggle datasets init -p /kaggle/working/lokr_output
+# правим id → "<username>/my-ace-lora", затем:
+kaggle datasets create -p /kaggle/working/lokr_output
+```
+
+### Скачать на ПК
+```bash
+kaggle datasets download -d <username>/my-ace-lora
+```
+
+### ⚠️ Безопасность
+`kaggle.json` = пароль к аккаунту. Не клади в репозиторий/публичные ноутбуки. Если засветился — Account → API → **Expire API Token** и создай новый.
+
+---
+
 ## TL;DR
 1. Kaggle → New Notebook → GPU P100 + Internet On.
 2. Ячейки 1–4: установка движка + запуск `app.py --config acestep-v15-xl-turbo` + cloudflared.
 3. Включи рычаги памяти (раздел 2): без LM, gradient_checkpointing, batch 1, короткие клипы, LoKr.
 4. **LoRA Training**: датасет → Scan → препроцессинг → Train LoKr (output в `/kaggle/working`) → загрузить → генерировать.
-5. Сохрани LoRA из `/kaggle/working` (раздел 5). Если XL OOM → 2B (раздел 6).
+5. Сохрани LoRA из `/kaggle/working` (раздел 5) или через Kaggle API (раздел 8). Если XL OOM → 2B (раздел 6).
