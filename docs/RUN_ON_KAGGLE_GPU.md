@@ -42,9 +42,12 @@
 ### 1) Системные пакеты + cloudflared (Node больше не нужен — UI на Python)
 ```python
 !apt-get install -y ffmpeg > /dev/null 2>&1
-!wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb -O /tmp/cf.deb && dpkg -i /tmp/cf.deb > /dev/null 2>&1
+# cloudflared ставим прямым бинарником в /usr/local/bin (dpkg на Kaggle часто падает из-за зависимостей → `cloudflared: command not found`)
+!wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -O /usr/local/bin/cloudflared
+!chmod +x /usr/local/bin/cloudflared
 !cloudflared --version
 ```
+> Если ранее видели `cloudflared: command not found` — это как раз из-за старого `dpkg`-способа; теперь бинарник кладётся напрямую в PATH.
 
 ### 2) Клонирование репо + установка движка и зависимостей
 ```python
