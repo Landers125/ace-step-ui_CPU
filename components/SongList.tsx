@@ -14,6 +14,8 @@ interface SongListProps {
     selectedSong: Song | null;
     likedSongIds: Set<string>;
     isPlaying: boolean;
+    workspaceName?: string;
+    isLoadingWorkspace?: boolean;
     referenceTracks?: { id: string; filename: string; audio_url: string; duration?: number | null; created_at?: string }[];
     onPlay: (song: Song) => void;
     onSelect: (song: Song) => void;
@@ -39,10 +41,10 @@ interface SongListProps {
 // Define Filter Types
 type FilterType = 'liked' | 'public' | 'private' | 'generating';
 
-// Map model ID to short display name
-const getModelDisplayName = (modelId?: string): string => {
+// Map ACE model ID to short display name
+const getAceModelDisplayName = (modelId?: string): string => {
     if (!modelId) return 'v1.5';
-    
+
     const mapping: Record<string, string> = {
         'acestep-v15-base': '1.5B',
         'acestep-v15-sft': '1.5S',
@@ -52,6 +54,44 @@ const getModelDisplayName = (modelId?: string): string => {
         'acestep-v15-turbo': '1.5T',
     };
     return mapping[modelId] || 'v1.5';
+};
+
+const getSongProvider = (song: Song): 'ace' | 'suno' => {
+    if (song.provider === 'suno' || song.generationParams?.provider === 'suno' || song.id.startsWith('suno_')) {
+        return 'suno';
+    }
+    return 'ace';
+};
+
+const getSunoModelDisplayName = (song: Song): string => {
+    const clip = song.generationParams?.externalClip;
+    return song.modelLabel ||
+        clip?.metadata?.model_badges?.songrow?.display_name ||
+        clip?.major_model_version ||
+        clip?.metadata?.major_model_version ||
+        clip?.mv ||
+        clip?.model_name ||
+        'Suno';
+};
+
+const getModelDisplayName = (song: Song): string => {
+    return getSongProvider(song) === 'suno'
+        ? getSunoModelDisplayName(song)
+        : getAceModelDisplayName(song.ditModel);
+};
+
+const getModelTitle = (song: Song): string => {
+    if (getSongProvider(song) !== 'suno') {
+        return `ACE DiT model: ${song.ditModel || 'default v1.5'}`;
+    }
+    const clip = song.generationParams?.externalClip;
+    const modelName = song.modelName || clip?.model_name;
+    return modelName ? `Suno model: ${getSunoModelDisplayName(song)} (${modelName})` : `Suno model: ${getSunoModelDisplayName(song)}`;
+};
+
+const isSongLocked = (song: Song): boolean => {
+    const clip = song.generationParams?.externalClip;
+    return song.isPublic === false || clip?.is_public === false || clip?.project?.is_public === false;
 };
 
 const createDragPreview = (element: HTMLElement) => {
@@ -92,6 +132,8 @@ export const SongList: React.FC<SongListProps> = ({
     selectedSong,
     likedSongIds,
     isPlaying,
+    workspaceName = 'My Workspace',
+    isLoadingWorkspace = false,
     referenceTracks = [],
     onPlay,
     onSelect,
@@ -224,7 +266,7 @@ export const SongList: React.FC<SongListProps> = ({
                     <div className="flex items-center gap-2 text-sm text-zinc-500 dark:text-zinc-400">
                         <span className="hover:text-black dark:hover:text-white cursor-pointer transition-colors">Workspaces</span>
                         <span className="text-zinc-400 dark:text-zinc-600">›</span>
-                        <span className="text-zinc-900 dark:text-white font-medium">My Workspace</span>
+                        <span className="text-zinc-900 dark:text-white font-medium">{workspaceName}</span>
                     </div>
 
                     <div className="flex items-center gap-3">
@@ -341,7 +383,12 @@ export const SongList: React.FC<SongListProps> = ({
 
                 {/* List */}
                 <div className="space-y-2"> {/* Reduced vertical spacing */}
-                    {listItems.length === 0 ? (
+                    {isLoadingWorkspace ? (
+                        <div className="flex flex-col items-center justify-center h-64 text-zinc-500 space-y-4 border border-dashed border-zinc-200 dark:border-white/5 rounded-2xl bg-zinc-50 dark:bg-white/[0.02]">
+                            <Loader2 size={32} className="animate-spin" />
+                            <p className="font-medium">Loading workspace songs...</p>
+                        </div>
+                    ) : listItems.length === 0 ? (
                         <div className="flex flex-col items-center justify-center h-64 text-zinc-500 space-y-4 border border-dashed border-zinc-200 dark:border-white/5 rounded-2xl bg-zinc-50 dark:bg-white/[0.02]">
                             <div className="w-16 h-16 rounded-full bg-zinc-100 dark:bg-white/5 flex items-center justify-center">
                                 <Filter size={32} />
@@ -638,11 +685,18 @@ const SongItem: React.FC<SongItemProps> = ({
                                 {song.title || (song.isGenerating ? (song.queuePosition ? "Queued..." : "Creating...") : "Untitled")}
                             </h3>
                         )}
-                        <span className="inline-flex items-center justify-center text-[9px] font-bold text-white bg-gradient-to-r from-pink-500 to-purple-500 px-1.5 py-0.5 rounded-sm shadow-sm" title={`DiT model: ${song.ditModel || 'undefined'}`}>
-                            {getModelDisplayName(song.ditModel)}
+                        <span
+                            className={`inline-flex items-center justify-center text-[9px] font-bold text-white px-1.5 py-0.5 rounded-sm shadow-sm ${
+                                getSongProvider(song) === 'suno'
+                                    ? 'bg-gradient-to-r from-fuchsia-500 to-pink-500'
+                                    : 'bg-gradient-to-r from-pink-500 to-purple-500'
+                            }`}
+                            title={getModelTitle(song)}
+                        >
+                            {getModelDisplayName(song)}
                         </span>
-                        {song.isPublic === false && (
-                            <Lock size={12} className="text-zinc-400 dark:text-zinc-500" />
+                        {isSongLocked(song) && (
+                            <Lock size={12} className="text-zinc-400 dark:text-zinc-500" aria-label="Private" />
                         )}
                     </div>
                     <div className="flex items-center gap-2">

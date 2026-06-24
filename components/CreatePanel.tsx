@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { Sparkles, ChevronDown, Settings2, Trash2, Music2, Sliders, Dices, Hash, RefreshCw, Plus, Upload, Play, Pause, Loader2 } from 'lucide-react';
+import { Sparkles, ChevronDown, Settings2, Trash2, Music2, Sliders, Dices, Hash, RefreshCw, Plus, Upload, Play, Pause, Loader2, KeyRound, ExternalLink } from 'lucide-react';
 import { GenerationParams, Song } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { useI18n } from '../context/I18nContext';
-import { generateApi } from '../services/api';
+import { generateApi, sunoAuthApi, SunoAuthStatus } from '../services/api';
 import { MAIN_STYLES } from '../data/genres';
 import { EditableSlider } from './EditableSlider';
 
@@ -25,6 +25,7 @@ interface CreatePanelProps {
   createdSongs?: Song[];
   pendingAudioSelection?: { target: 'reference' | 'source'; url: string; title?: string } | null;
   onAudioSelectionApplied?: () => void;
+  onSunoWorkspaceChange?: (workspace: { id: string; name: string; baseUrl: string; apiKey?: string } | null) => void;
 }
 
 const KEY_SIGNATURES = [
@@ -116,6 +117,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
   createdSongs = [],
   pendingAudioSelection,
   onAudioSelectionApplied,
+  onSunoWorkspaceChange,
 }) => {
   const { isAuthenticated, token, user } = useAuth();
   const { t } = useI18n();
@@ -133,6 +135,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
   }, []);
 
   // Mode
+  const [provider, setProvider] = useState<'ace' | 'suno'>('ace');
   const [customMode, setCustomMode] = useState(true);
 
   // Simple Mode
@@ -142,6 +145,38 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
   const [lyrics, setLyrics] = useState('');
   const [style, setStyle] = useState('');
   const [title, setTitle] = useState('');
+
+  // Suno-compatible API
+  const [sunoBaseUrl, setSunoBaseUrl] = useState(() => localStorage.getItem('suno-base-url') || 'https://studio-api.prod.suno.com');
+  const [sunoApiKey, setSunoApiKey] = useState(() => localStorage.getItem('suno-api-key') || '');
+  const [sunoEndpoint, setSunoEndpoint] = useState(() => localStorage.getItem('suno-endpoint') || '/api/generate/v2-web/');
+  const [sunoModel, setSunoModel] = useState(() => localStorage.getItem('suno-model') || 'chirp-fenix');
+  const [sunoProjectId, setSunoProjectId] = useState(() => localStorage.getItem('suno-project-id') || '');
+  const [sunoProjects, setSunoProjects] = useState<Array<{ id: string; name?: string; title?: string }>>([]);
+  const [sunoNewProjectName, setSunoNewProjectName] = useState('');
+  const [isLoadingSunoProjects, setIsLoadingSunoProjects] = useState(false);
+  const [sunoProjectError, setSunoProjectError] = useState<string | null>(null);
+  const [sunoAuthStatus, setSunoAuthStatus] = useState<SunoAuthStatus | null>(null);
+  const [isSunoAuthLoading, setIsSunoAuthLoading] = useState(false);
+  const [sunoAuthMessage, setSunoAuthMessage] = useState<string | null>(null);
+  const [sunoCookieInput, setSunoCookieInput] = useState('');
+  const [showSunoCookieInput, setShowSunoCookieInput] = useState(false);
+  const [sunoNegativeTags, setSunoNegativeTags] = useState(() => localStorage.getItem('suno-negative-tags') || '');
+  const [sunoTask, setSunoTask] = useState(() => localStorage.getItem('suno-task') || '');
+  const [sunoContinueClipId, setSunoContinueClipId] = useState(() => localStorage.getItem('suno-continue-clip-id') || '');
+  const [sunoContinueAt, setSunoContinueAt] = useState(() => localStorage.getItem('suno-continue-at') || '');
+  const [sunoCoverClipId, setSunoCoverClipId] = useState(() => localStorage.getItem('suno-cover-clip-id') || '');
+  const [sunoArtistClipId, setSunoArtistClipId] = useState(() => localStorage.getItem('suno-artist-clip-id') || '');
+  const [sunoInfillStartS, setSunoInfillStartS] = useState(() => localStorage.getItem('suno-infill-start-s') || '');
+  const [sunoInfillEndS, setSunoInfillEndS] = useState(() => localStorage.getItem('suno-infill-end-s') || '');
+  const [sunoStemTypeId, setSunoStemTypeId] = useState(() => localStorage.getItem('suno-stem-type-id') || '');
+  const [sunoOverrideFieldsJson, setSunoOverrideFieldsJson] = useState(() => localStorage.getItem('suno-override-fields-json') || '');
+  const [sunoVocalGender, setSunoVocalGender] = useState<'m' | 'f' | ''>(() => {
+    const stored = localStorage.getItem('suno-vocal-gender');
+    return stored === 'm' || stored === 'f' ? stored : '';
+  });
+  const [sunoWeirdness, setSunoWeirdness] = useState(() => Number(localStorage.getItem('suno-weirdness') || '50'));
+  const [sunoStyleInfluence, setSunoStyleInfluence] = useState(() => Number(localStorage.getItem('suno-style-influence') || '50'));
 
   // Common
   const [instrumental, setInstrumental] = useState(false);
@@ -277,6 +312,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [isFormattingStyle, setIsFormattingStyle] = useState(false);
   const [isFormattingLyrics, setIsFormattingLyrics] = useState(false);
+  const [isPersonalizingSunoStyle, setIsPersonalizingSunoStyle] = useState(false);
   const [isDraggingFile, setIsDraggingFile] = useState(false);
   const [dragKind, setDragKind] = useState<'file' | 'audio' | null>(null);
   const referenceInputRef = useRef<HTMLInputElement>(null);
@@ -352,6 +388,105 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
       return () => document.removeEventListener('mousedown', handleClickOutside);
     }
   }, [showModelMenu]);
+
+  useEffect(() => {
+    localStorage.setItem('suno-base-url', sunoBaseUrl);
+  }, [sunoBaseUrl]);
+
+  useEffect(() => {
+    localStorage.setItem('suno-api-key', sunoApiKey);
+  }, [sunoApiKey]);
+
+  useEffect(() => {
+    localStorage.setItem('suno-endpoint', sunoEndpoint);
+  }, [sunoEndpoint]);
+
+  useEffect(() => {
+    localStorage.setItem('suno-model', sunoModel);
+  }, [sunoModel]);
+
+  useEffect(() => {
+    localStorage.setItem('suno-project-id', sunoProjectId);
+  }, [sunoProjectId]);
+
+  useEffect(() => {
+    localStorage.setItem('suno-negative-tags', sunoNegativeTags);
+  }, [sunoNegativeTags]);
+
+  useEffect(() => {
+    localStorage.setItem('suno-task', sunoTask);
+  }, [sunoTask]);
+
+  useEffect(() => {
+    localStorage.setItem('suno-continue-clip-id', sunoContinueClipId);
+  }, [sunoContinueClipId]);
+
+  useEffect(() => {
+    localStorage.setItem('suno-continue-at', sunoContinueAt);
+  }, [sunoContinueAt]);
+
+  useEffect(() => {
+    localStorage.setItem('suno-cover-clip-id', sunoCoverClipId);
+  }, [sunoCoverClipId]);
+
+  useEffect(() => {
+    localStorage.setItem('suno-artist-clip-id', sunoArtistClipId);
+  }, [sunoArtistClipId]);
+
+  useEffect(() => {
+    localStorage.setItem('suno-infill-start-s', sunoInfillStartS);
+  }, [sunoInfillStartS]);
+
+  useEffect(() => {
+    localStorage.setItem('suno-infill-end-s', sunoInfillEndS);
+  }, [sunoInfillEndS]);
+
+  useEffect(() => {
+    localStorage.setItem('suno-stem-type-id', sunoStemTypeId);
+  }, [sunoStemTypeId]);
+
+  useEffect(() => {
+    localStorage.setItem('suno-override-fields-json', sunoOverrideFieldsJson);
+  }, [sunoOverrideFieldsJson]);
+
+  useEffect(() => {
+    localStorage.setItem('suno-vocal-gender', sunoVocalGender);
+  }, [sunoVocalGender]);
+
+  useEffect(() => {
+    localStorage.setItem('suno-weirdness', String(sunoWeirdness));
+  }, [sunoWeirdness]);
+
+  useEffect(() => {
+    localStorage.setItem('suno-style-influence', String(sunoStyleInfluence));
+  }, [sunoStyleInfluence]);
+
+  useEffect(() => {
+    if (provider !== 'suno' || !token) return;
+    let cancelled = false;
+    sunoAuthApi.getStatus(token)
+      .then(status => {
+        if (!cancelled) setSunoAuthStatus(status);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [provider, token]);
+
+  useEffect(() => {
+    if (provider !== 'suno') {
+      onSunoWorkspaceChange?.(null);
+      return;
+    }
+    const selected = sunoProjects.find(project => project.id === sunoProjectId);
+    onSunoWorkspaceChange?.(sunoProjectId ? {
+      id: sunoProjectId,
+      name: selected?.name || selected?.title || sunoProjectId,
+      baseUrl: sunoBaseUrl.trim() || 'https://studio-api.prod.suno.com',
+      apiKey: sunoApiKey.trim() || undefined,
+    } : null);
+  }, [provider, sunoProjectId, sunoProjects, sunoBaseUrl, sunoApiKey, onSunoWorkspaceChange]);
 
   // Auto-unload LoRA when model changes
   useEffect(() => {
@@ -737,6 +872,36 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
     }
   };
 
+  const personalizeSunoStyle = async () => {
+    if (!token) {
+      alert('Please sign in first');
+      return;
+    }
+    if (!style.trim()) {
+      alert('Enter a style prompt first');
+      return;
+    }
+
+    setIsPersonalizingSunoStyle(true);
+    try {
+      const result = await generateApi.personalizeSunoStyle({
+        baseUrl: sunoBaseUrl.trim() || 'https://studio-api.prod.suno.com',
+        apiKey: sunoApiKey.trim() || undefined,
+        tags: style.trim(),
+      }, token);
+      const nextStyle = result.style || (typeof result.raw === 'string' ? result.raw : '');
+      if (!nextStyle.trim()) {
+        throw new Error('Suno returned an empty personalized style');
+      }
+      setStyle(nextStyle.trim());
+    } catch (error) {
+      console.error('Failed to personalize Suno style:', error);
+      alert(error instanceof Error ? error.message : 'Failed to personalize Suno style');
+    } finally {
+      setIsPersonalizingSunoStyle(false);
+    }
+  };
+
   const openAudioModal = (target: 'reference' | 'source', tab: 'uploads' | 'created' = 'uploads') => {
     setAudioModalTarget(target);
     setTempAudioUrl('');
@@ -919,6 +1084,150 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
     return `${minutes}:${String(seconds).padStart(2, '0')}`;
   };
 
+  const parseOptionalNumber = (value: string): number | undefined => {
+    if (!value.trim()) return undefined;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  };
+
+  const runSunoAuthAction = async (action: () => Promise<SunoAuthStatus | (SunoAuthStatus & { success?: boolean }) | { running: boolean; cdpUrl: string; launched?: boolean }>, successMessage: string) => {
+    if (!token) {
+      setSunoAuthMessage('Please sign in first');
+      return;
+    }
+    setIsSunoAuthLoading(true);
+    setSunoAuthMessage(null);
+    try {
+      const result = await action();
+      if ('hasCookie' in result) {
+        setSunoAuthStatus(result);
+      } else {
+        const status = await sunoAuthApi.getStatus(token);
+        setSunoAuthStatus(status);
+      }
+      setSunoAuthMessage(successMessage);
+    } catch (error) {
+      setSunoAuthMessage(error instanceof Error ? error.message : 'Suno auth action failed');
+    } finally {
+      setIsSunoAuthLoading(false);
+    }
+  };
+
+  const openSunoLoginChrome = () => {
+    void runSunoAuthAction(
+      () => sunoAuthApi.startChromeCdp(token!),
+      'Dedicated Chrome is ready. Log in to suno.com there, then import cookies.'
+    );
+  };
+
+  const importSunoCookies = () => {
+    void runSunoAuthAction(
+      () => sunoAuthApi.importFromChrome(token!),
+      'Suno cookies imported. You can leave the JWT override blank.'
+    );
+  };
+
+  const refreshSunoJwt = () => {
+    void runSunoAuthAction(
+      async () => {
+        const refreshed = await sunoAuthApi.refreshJwt(token!);
+        return {
+          hasCookie: true,
+          hasJwt: refreshed.hasJwt,
+          jwtExpiresAt: refreshed.expiresAt,
+          userId: refreshed.userId,
+          email: refreshed.email,
+        };
+      },
+      'Suno JWT refreshed.'
+    );
+  };
+
+  const saveManualSunoCookie = () => {
+    if (!sunoCookieInput.trim()) {
+      setSunoAuthMessage('Paste a Suno cookie string first');
+      return;
+    }
+    void runSunoAuthAction(
+      () => sunoAuthApi.saveCookie(sunoCookieInput.trim(), token!),
+      'Suno cookie saved. You can leave the JWT override blank.'
+    );
+  };
+
+  const loadSunoProjects = useCallback(async () => {
+    if (!token) {
+      setSunoProjectError('Please sign in first');
+      return;
+    }
+
+    setIsLoadingSunoProjects(true);
+    setSunoProjectError(null);
+    try {
+      const result = await generateApi.listSunoProjects({
+        baseUrl: sunoBaseUrl.trim() || 'https://studio-api.prod.suno.com',
+        apiKey: sunoApiKey.trim() || undefined,
+      }, token);
+      const projects = (result.projects || [])
+        .map((project: any) => ({
+          id: String(project.id || project.project_id || ''),
+          name: project.name || project.title,
+          title: project.title || project.name,
+        }))
+        .filter((project: { id: string }) => project.id);
+      setSunoProjects(projects);
+      if (projects.length > 0 && (!sunoProjectId || !projects.some((project: { id: string }) => project.id === sunoProjectId))) {
+        setSunoProjectId(projects[0].id);
+      }
+    } catch (error) {
+      setSunoProjectError(error instanceof Error ? error.message : 'Failed to load projects');
+    } finally {
+      setIsLoadingSunoProjects(false);
+    }
+  }, [sunoApiKey, sunoBaseUrl, sunoProjectId, token]);
+
+  useEffect(() => {
+    if (provider !== 'suno' || !token || !sunoAuthStatus?.hasCookie || sunoProjects.length > 0 || isLoadingSunoProjects) {
+      return;
+    }
+    void loadSunoProjects();
+  }, [provider, token, sunoAuthStatus?.hasCookie, sunoProjects.length, isLoadingSunoProjects, loadSunoProjects]);
+
+  const createSunoProject = async () => {
+    if (!token) {
+      setSunoProjectError('Please sign in first');
+      return;
+    }
+    if (!sunoNewProjectName.trim()) {
+      setSunoProjectError('Enter a project name');
+      return;
+    }
+
+    setIsLoadingSunoProjects(true);
+    setSunoProjectError(null);
+    try {
+      const result = await generateApi.createSunoProject({
+        baseUrl: sunoBaseUrl.trim() || 'https://studio-api.prod.suno.com',
+        apiKey: sunoApiKey.trim() || undefined,
+        name: sunoNewProjectName.trim(),
+      }, token);
+      const rawProject: any = result.project;
+      const project = {
+        id: String(rawProject?.id || rawProject?.project_id || ''),
+        name: rawProject?.name || rawProject?.title || sunoNewProjectName.trim(),
+        title: rawProject?.title || rawProject?.name || sunoNewProjectName.trim(),
+      };
+      if (project.id) {
+        setSunoProjects(prev => [project, ...prev.filter(item => item.id !== project.id)]);
+        setSunoProjectId(project.id);
+      }
+      setSunoNewProjectName('');
+    } catch (error) {
+      setSunoProjectError(error instanceof Error ? error.message : 'Failed to create project');
+    } finally {
+      setIsLoadingSunoProjects(false);
+    }
+  };
+
   const toggleAudio = (target: 'reference' | 'source') => {
     const audio = target === 'reference' ? referenceAudioRef.current : sourceAudioRef.current;
     if (!audio) return;
@@ -966,6 +1275,62 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
   };
 
   const handleGenerate = () => {
+    if (provider === 'suno') {
+      const selectedSunoProject = sunoProjects.find(project => project.id === sunoProjectId);
+      onGenerate({
+        provider: 'suno',
+        customMode: true,
+        songDescription: undefined,
+        prompt: lyrics,
+        lyrics,
+        style,
+        title,
+        instrumental,
+        vocalLanguage,
+        bpm,
+        keyScale,
+        timeSignature,
+        duration,
+        inferenceSteps,
+        guidanceScale,
+        batchSize: 1,
+        randomSeed,
+        seed,
+        thinking: false,
+        enhance: false,
+        audioFormat,
+        inferMethod,
+        shift,
+        lmTemperature,
+        lmCfgScale,
+        lmTopK,
+        lmTopP,
+        lmNegativePrompt,
+        sunoBaseUrl: sunoBaseUrl.trim() || 'https://studio-api.prod.suno.com',
+        sunoApiKey: sunoApiKey.trim(),
+        sunoEndpoint: sunoEndpoint.trim() || '/api/generate/v2-web/',
+        sunoModel: sunoModel.trim(),
+        sunoProjectId: sunoProjectId.trim() || undefined,
+        sunoProjectName: selectedSunoProject?.name || selectedSunoProject?.title || undefined,
+        sunoWaitForAudio: true,
+        sunoPollSeconds: 90,
+        sunoNegativeTags: sunoNegativeTags.trim() || undefined,
+        sunoTask: sunoTask.trim() || undefined,
+        sunoVocalGender: sunoVocalGender || undefined,
+        sunoWeirdness,
+        sunoStyleInfluence,
+        sunoContinueClipId: sunoContinueClipId.trim() || undefined,
+        sunoContinueAt: parseOptionalNumber(sunoContinueAt),
+        sunoCoverClipId: sunoCoverClipId.trim() || undefined,
+        sunoArtistClipId: sunoArtistClipId.trim() || undefined,
+        sunoInfillStartS: parseOptionalNumber(sunoInfillStartS),
+        sunoInfillEndS: parseOptionalNumber(sunoInfillEndS),
+        sunoStemTypeId: sunoStemTypeId.trim() || undefined,
+        sunoOverrideFieldsJson: sunoOverrideFieldsJson.trim() || undefined,
+      });
+      return;
+    }
+
     const styleWithGender = (() => {
       if (!vocalGender) return style;
       const genderHint = vocalGender === 'male' ? 'Male vocals' : 'Female vocals';
@@ -986,6 +1351,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
 
       onGenerate({
         customMode,
+        provider: 'ace',
         songDescription: customMode ? undefined : songDescription,
         prompt: lyrics,
         lyrics,
@@ -1121,15 +1487,34 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
         />
 
         {/* Header - Mode Toggle & Model Selection */}
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
-            <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">ACE-Step v1.5</span>
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2 min-w-0">
+            <div className={`w-2 h-2 rounded-full animate-pulse ${provider === 'ace' ? 'bg-green-500' : 'bg-amber-500'}`}></div>
+            <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400 truncate">
+              {provider === 'ace' ? 'ACE-Step v1.5' : 'Suno API'}
+            </span>
           </div>
 
           <div className="flex items-center gap-2">
-            {/* Mode Toggle */}
             <div className="flex items-center bg-zinc-200 dark:bg-black/40 rounded-lg p-1 border border-zinc-300 dark:border-white/5">
+              <button
+                type="button"
+                onClick={() => setProvider('ace')}
+                className={`px-2.5 py-1.5 rounded-md text-xs font-semibold transition-all ${provider === 'ace' ? 'bg-white dark:bg-zinc-800 text-black dark:text-white shadow-sm' : 'text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-300'}`}
+              >
+                ACE
+              </button>
+              <button
+                type="button"
+                onClick={() => setProvider('suno')}
+                className={`px-2.5 py-1.5 rounded-md text-xs font-semibold transition-all ${provider === 'suno' ? 'bg-white dark:bg-zinc-800 text-black dark:text-white shadow-sm' : 'text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-300'}`}
+              >
+                Suno
+              </button>
+            </div>
+
+            {/* Mode Toggle */}
+            {provider === 'ace' && <div className="flex items-center bg-zinc-200 dark:bg-black/40 rounded-lg p-1 border border-zinc-300 dark:border-white/5">
               <button
                 onClick={() => setCustomMode(false)}
                 className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${!customMode ? 'bg-white dark:bg-zinc-800 text-black dark:text-white shadow-sm' : 'text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-300'}`}
@@ -1142,10 +1527,10 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
               >
                 {t('custom')}
               </button>
-            </div>
+            </div>}
 
             {/* Model Selection */}
-            <div className="relative" ref={modelMenuRef}>
+            {provider === 'ace' && <div className="relative" ref={modelMenuRef}>
               <button
                 onClick={() => setShowModelMenu(!showModelMenu)}
                 className="bg-zinc-200 dark:bg-black/40 border border-zinc-300 dark:border-white/5 rounded-md px-2 py-1 text-[11px] font-medium text-zinc-900 dark:text-white hover:bg-zinc-300 dark:hover:bg-black/50 transition-colors flex items-center gap-1"
@@ -1201,12 +1586,279 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
                   </div>
                 </div>
               )}
-            </div>
+            </div>}
           </div>
         </div>
 
+        {provider === 'suno' && (
+          <div className="space-y-5">
+            <div className="bg-white dark:bg-suno-card rounded-xl border border-zinc-200 dark:border-white/5 overflow-hidden">
+              <div className="px-3 py-2.5 border-b border-zinc-100 dark:border-white/5 bg-zinc-50 dark:bg-white/5">
+                <span className="text-xs font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wide">Suno API</span>
+                <p className="text-[11px] text-zinc-400 dark:text-zinc-500 mt-0.5">Uses stored Suno cookies with lazy Clerk JWT refresh. JWT override is optional.</p>
+              </div>
+              <div className="p-3 space-y-3">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wide px-1">Base URL</label>
+                  <input
+                    type="url"
+                    value={sunoBaseUrl}
+                    onChange={(e) => setSunoBaseUrl(e.target.value)}
+                    placeholder="https://studio-api.prod.suno.com"
+                    className="w-full bg-zinc-50 dark:bg-black/20 border border-zinc-200 dark:border-white/10 rounded-xl px-3 py-2 text-sm text-zinc-900 dark:text-white placeholder-zinc-400 dark:placeholder-zinc-600 focus:outline-none focus:border-pink-500 dark:focus:border-pink-500"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wide px-1">Endpoint</label>
+                    <input
+                      type="text"
+                      value={sunoEndpoint}
+                      onChange={(e) => setSunoEndpoint(e.target.value)}
+                      placeholder="/api/generate/v2-web/"
+                      className="w-full bg-zinc-50 dark:bg-black/20 border border-zinc-200 dark:border-white/10 rounded-xl px-3 py-2 text-sm text-zinc-900 dark:text-white placeholder-zinc-400 dark:placeholder-zinc-600 focus:outline-none focus:border-pink-500 dark:focus:border-pink-500"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wide px-1">Model</label>
+                    <input
+                      type="text"
+                      value={sunoModel}
+                      onChange={(e) => setSunoModel(e.target.value)}
+                      placeholder="chirp-fenix"
+                      className="w-full bg-zinc-50 dark:bg-black/20 border border-zinc-200 dark:border-white/10 rounded-xl px-3 py-2 text-sm text-zinc-900 dark:text-white placeholder-zinc-400 dark:placeholder-zinc-600 focus:outline-none focus:border-pink-500 dark:focus:border-pink-500"
+                    />
+                  </div>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wide px-1">JWT Override</label>
+                  <input
+                    type="password"
+                    value={sunoApiKey}
+                    onChange={(e) => setSunoApiKey(e.target.value)}
+                    placeholder="Optional Bearer JWT. Blank uses saved Suno cookie."
+                    className="w-full bg-zinc-50 dark:bg-black/20 border border-zinc-200 dark:border-white/10 rounded-xl px-3 py-2 text-sm text-zinc-900 dark:text-white placeholder-zinc-400 dark:placeholder-zinc-600 focus:outline-none focus:border-pink-500 dark:focus:border-pink-500"
+                  />
+                </div>
+                <div className="space-y-2 rounded-xl border border-zinc-200 dark:border-white/10 bg-zinc-50/70 dark:bg-black/20 p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <KeyRound size={13} className="text-zinc-500 dark:text-zinc-400" />
+                        <span className="text-xs font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wide">Suno Auth</span>
+                      </div>
+                      <p className="mt-1 truncate text-[11px] text-zinc-400 dark:text-zinc-500">
+                        {sunoAuthStatus?.email || (sunoAuthStatus?.hasCookie ? 'Cookie saved' : 'No saved Suno cookie')}
+                      </p>
+                    </div>
+                    <span className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-bold ${sunoAuthStatus?.hasCookie ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300' : 'bg-zinc-100 text-zinc-500 dark:bg-white/10 dark:text-zinc-400'}`}>
+                      {sunoAuthStatus?.hasCookie ? 'READY' : 'EMPTY'}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    <button
+                      type="button"
+                      onClick={openSunoLoginChrome}
+                      disabled={isSunoAuthLoading}
+                      className="inline-flex items-center justify-center gap-1 rounded-lg border border-zinc-200 dark:border-white/10 px-2 py-2 text-[11px] font-semibold text-zinc-600 dark:text-zinc-300 hover:bg-white dark:hover:bg-white/10 disabled:opacity-50"
+                    >
+                      <ExternalLink size={12} />
+                      Chrome
+                    </button>
+                    <button
+                      type="button"
+                      onClick={importSunoCookies}
+                      disabled={isSunoAuthLoading}
+                      className="inline-flex items-center justify-center gap-1 rounded-lg border border-zinc-200 dark:border-white/10 px-2 py-2 text-[11px] font-semibold text-zinc-600 dark:text-zinc-300 hover:bg-white dark:hover:bg-white/10 disabled:opacity-50"
+                    >
+                      {isSunoAuthLoading ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}
+                      Import
+                    </button>
+                    <button
+                      type="button"
+                      onClick={refreshSunoJwt}
+                      disabled={isSunoAuthLoading}
+                      className="inline-flex items-center justify-center gap-1 rounded-lg border border-zinc-200 dark:border-white/10 px-2 py-2 text-[11px] font-semibold text-zinc-600 dark:text-zinc-300 hover:bg-white dark:hover:bg-white/10 disabled:opacity-50"
+                    >
+                      <RefreshCw size={12} className={isSunoAuthLoading ? 'animate-spin' : ''} />
+                      Refresh
+                    </button>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowSunoCookieInput(prev => !prev)}
+                    className="text-[11px] font-semibold text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-white"
+                  >
+                    {showSunoCookieInput ? 'Hide manual cookie' : 'Manual cookie'}
+                  </button>
+                  {showSunoCookieInput && (
+                    <div className="space-y-2">
+                      <textarea
+                        value={sunoCookieInput}
+                        onChange={(e) => setSunoCookieInput(e.target.value)}
+                        placeholder="Paste Suno Cookie header"
+                        rows={3}
+                        className="w-full resize-none bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-white/10 rounded-xl px-3 py-2 text-xs text-zinc-900 dark:text-white placeholder-zinc-400 dark:placeholder-zinc-600 focus:outline-none focus:border-pink-500 dark:focus:border-pink-500"
+                      />
+                      <button
+                        type="button"
+                        onClick={saveManualSunoCookie}
+                        disabled={isSunoAuthLoading}
+                        className="w-full rounded-xl bg-zinc-900 dark:bg-white px-3 py-2 text-xs font-bold text-white dark:text-zinc-900 hover:opacity-90 disabled:opacity-50"
+                      >
+                        Save Cookie
+                      </button>
+                    </div>
+                  )}
+                  {(sunoAuthStatus?.jwtExpiresAt || sunoAuthStatus?.expiresAt) && (
+                    <p className="text-[11px] text-zinc-400 dark:text-zinc-500">
+                      Expires: {new Date(sunoAuthStatus.jwtExpiresAt || sunoAuthStatus.expiresAt || '').toLocaleString()}
+                    </p>
+                  )}
+                  {sunoAuthMessage && <p className={`text-xs ${sunoAuthMessage.includes('failed') || sunoAuthMessage.includes('Error') || sunoAuthMessage.includes('Please') ? 'text-rose-500' : 'text-emerald-600 dark:text-emerald-400'}`}>{sunoAuthMessage}</p>}
+                </div>
+                <div className="space-y-2 rounded-xl border border-zinc-200 dark:border-white/10 bg-zinc-50/70 dark:bg-black/20 p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <label className="text-xs font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wide">Workspace</label>
+                    <button
+                      type="button"
+                      onClick={() => void loadSunoProjects()}
+                      disabled={isLoadingSunoProjects}
+                      className="inline-flex items-center gap-1 rounded-lg border border-zinc-200 dark:border-white/10 px-2 py-1 text-[11px] font-semibold text-zinc-600 dark:text-zinc-300 hover:bg-white dark:hover:bg-white/10 disabled:opacity-50"
+                    >
+                      {isLoadingSunoProjects ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+                      Load
+                    </button>
+                  </div>
+                  <select
+                    value={sunoProjectId}
+                    onChange={(e) => setSunoProjectId(e.target.value)}
+                    className="w-full bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-white/10 rounded-xl px-3 py-2 text-sm text-zinc-900 dark:text-white focus:outline-none focus:border-pink-500 dark:focus:border-pink-500 [&>option]:bg-white [&>option]:dark:bg-zinc-800"
+                  >
+                    <option value="">No workspace</option>
+                    {sunoProjects.map(project => (
+                      <option key={project.id} value={project.id}>
+                        {project.name || project.title || project.id}
+                      </option>
+                    ))}
+                  </select>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={sunoNewProjectName}
+                      onChange={(e) => setSunoNewProjectName(e.target.value)}
+                      placeholder="New workspace name"
+                      className="min-w-0 flex-1 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-white/10 rounded-xl px-3 py-2 text-sm text-zinc-900 dark:text-white placeholder-zinc-400 dark:placeholder-zinc-600 focus:outline-none focus:border-pink-500 dark:focus:border-pink-500"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => void createSunoProject()}
+                      disabled={isLoadingSunoProjects}
+                      className="rounded-xl bg-zinc-900 dark:bg-white px-3 py-2 text-xs font-bold text-white dark:text-zinc-900 hover:opacity-90 disabled:opacity-50"
+                    >
+                      Create
+                    </button>
+                  </div>
+                  {sunoProjectError && <p className="text-xs text-rose-500">{sunoProjectError}</p>}
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-white dark:bg-suno-card rounded-xl border border-zinc-200 dark:border-white/5 overflow-hidden">
+              <div className="px-3 py-2.5 text-xs font-bold uppercase tracking-wide text-zinc-500 dark:text-zinc-400 border-b border-zinc-100 dark:border-white/5 bg-zinc-50 dark:bg-white/5">
+                {t('title')}
+              </div>
+              <input
+                type="text"
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                placeholder={t('nameSong')}
+                className="w-full bg-transparent p-3 text-sm text-zinc-900 dark:text-white placeholder-zinc-400 dark:placeholder-zinc-600 focus:outline-none"
+              />
+            </div>
+
+            <div className="bg-white dark:bg-suno-card rounded-xl border border-zinc-200 dark:border-white/5 overflow-hidden">
+              <div className="flex items-center justify-between px-3 py-2.5 bg-zinc-50 dark:bg-white/5 border-b border-zinc-100 dark:border-white/5">
+                <div>
+                  <span className="text-xs font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wide">{t('lyrics')}</span>
+                  <p className="text-[11px] text-zinc-400 dark:text-zinc-500 mt-0.5">{t('leaveLyricsEmpty')}</p>
+                </div>
+                <button
+                  onClick={() => setInstrumental(!instrumental)}
+                  className={`px-2.5 py-1 rounded-full text-[10px] font-semibold border transition-colors ${
+                    instrumental
+                      ? 'bg-pink-600 text-white border-pink-500'
+                      : 'bg-white dark:bg-suno-card border-zinc-200 dark:border-white/10 text-zinc-600 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-white/10'
+                  }`}
+                >
+                  {instrumental ? t('instrumental') : t('vocal')}
+                </button>
+              </div>
+              <textarea
+                disabled={instrumental}
+                value={lyrics}
+                onChange={(e) => setLyrics(e.target.value)}
+                placeholder={instrumental ? t('instrumental') + ' mode' : t('lyricsPlaceholder')}
+                className={`w-full h-36 bg-transparent p-3 text-sm text-zinc-900 dark:text-white placeholder-zinc-400 dark:placeholder-zinc-600 focus:outline-none resize-none font-mono leading-relaxed ${instrumental ? 'opacity-30 cursor-not-allowed' : ''}`}
+              />
+            </div>
+
+            <div className="bg-white dark:bg-suno-card rounded-xl border border-zinc-200 dark:border-white/5 overflow-hidden">
+              <div className="flex items-center justify-between px-3 py-2.5 bg-zinc-50 dark:bg-white/5 border-b border-zinc-100 dark:border-white/5">
+                <div>
+                  <span className="text-xs font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wide">{t('styleOfMusic')}</span>
+                  <p className="text-[11px] text-zinc-400 dark:text-zinc-500 mt-0.5">{t('genreMoodInstruments')}</p>
+                </div>
+                <button
+                  className="p-1.5 hover:bg-zinc-200 dark:hover:bg-white/10 rounded transition-colors text-zinc-500 hover:text-black dark:hover:text-white"
+                  title={t('refreshGenres')}
+                  onClick={refreshMusicTags}
+                >
+                  <Dices size={14} />
+                </button>
+              </div>
+              <textarea
+                value={style}
+                onChange={(e) => setStyle(e.target.value)}
+                placeholder={t('stylePlaceholder')}
+                className="w-full h-20 bg-transparent p-3 text-sm text-zinc-900 dark:text-white placeholder-zinc-400 dark:placeholder-zinc-600 focus:outline-none resize-none"
+              />
+              <div className="px-3 pb-3">
+                <div className="flex flex-wrap gap-2">
+                  {musicTags.map(tag => (
+                    <button
+                      key={tag}
+                      onClick={() => setStyle(prev => prev ? `${prev}, ${tag}` : tag)}
+                      className="text-[10px] font-medium bg-zinc-100 dark:bg-white/5 hover:bg-zinc-200 dark:hover:bg-white/10 text-zinc-600 dark:text-zinc-400 hover:text-black dark:hover:text-white px-2.5 py-1 rounded-full transition-colors border border-zinc-200 dark:border-white/5"
+                    >
+                      {tag}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-white dark:bg-suno-card rounded-xl border border-zinc-200 dark:border-white/5 p-4 space-y-4">
+              <h3 className="text-xs font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wide flex items-center gap-2">
+                <Sliders size={14} />
+                {t('quickSettings')}
+              </h3>
+              <EditableSlider
+                label={t('duration')}
+                value={duration}
+                min={-1}
+                max={300}
+                step={5}
+                onChange={setDuration}
+                formatDisplay={(val) => val === -1 ? t('auto') : `${val}${t('seconds')}`}
+                autoLabel={t('auto')}
+              />
+            </div>
+          </div>
+        )}
+
         {/* SIMPLE MODE */}
-        {!customMode && (
+        {provider === 'ace' && !customMode && (
           <div className="space-y-5">
             {/* Song Description */}
             <div className="bg-white dark:bg-suno-card rounded-xl border border-zinc-200 dark:border-white/5 overflow-hidden">
@@ -1368,7 +2020,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
         )}
 
         {/* CUSTOM MODE */}
-        {customMode && (
+        {(provider === 'ace' || provider === 'suno') && customMode && (
           <div className="space-y-5">
             {/* Audio Section */}
             <div
@@ -1617,6 +2269,21 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
                   <p className="text-[11px] text-zinc-400 dark:text-zinc-500 mt-0.5">{t('genreMoodInstruments')}</p>
                 </div>
                 <div className="flex items-center gap-1">
+                  {provider === 'suno' && (
+                    <button
+                      className={`inline-flex items-center gap-1 rounded px-2 py-1 text-[10px] font-semibold transition-colors ${
+                        isPersonalizingSunoStyle
+                          ? 'bg-pink-100 text-pink-600 dark:bg-pink-500/20 dark:text-pink-300'
+                          : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-white/10 dark:text-zinc-300 dark:hover:bg-white/15'
+                      } disabled:opacity-50`}
+                      title="Personalize style prompt to match your taste"
+                      onClick={() => void personalizeSunoStyle()}
+                      disabled={isPersonalizingSunoStyle || !style.trim()}
+                    >
+                      {isPersonalizingSunoStyle ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
+                      Personalize
+                    </button>
+                  )}
                   <button
                     className="p-1.5 hover:bg-zinc-200 dark:hover:bg-white/10 rounded transition-colors text-zinc-500 hover:text-black dark:hover:text-white"
                     title={t('refreshGenres')}
@@ -1679,7 +2346,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
         )}
 
         {/* COMMON SETTINGS */}
-        <div className="space-y-4">
+        {provider === 'ace' && <div className="space-y-4">
           {/* Instrumental Toggle (Simple Mode) */}
           {!customMode && (
             <div className="flex items-center justify-between px-1 py-2">
@@ -1736,7 +2403,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
               </div>
             </div>
           )}
-        </div>
+        </div>}
 
         {/* LORA CONTROL PANEL */}
         {customMode && (
@@ -1881,7 +2548,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
         </div>
 
         {/* ADVANCED SETTINGS */}
-        <button
+        {(provider === 'ace' || provider === 'suno') && <button
           onClick={() => setShowAdvanced(!showAdvanced)}
           className="w-full flex items-center justify-between px-4 py-3 bg-white dark:bg-suno-card rounded-xl border border-zinc-200 dark:border-white/5 text-sm font-medium text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-white/5 transition-colors"
         >
@@ -1890,9 +2557,211 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
             <span>{t('advancedSettings')}</span>
           </div>
           <ChevronDown size={16} className={`text-zinc-500 transition-transform ${showAdvanced ? 'rotate-180' : ''}`} />
-        </button>
+        </button>}
 
-        {showAdvanced && (
+        {provider === 'suno' && showAdvanced && (
+          <div className="bg-white dark:bg-suno-card rounded-xl border border-zinc-200 dark:border-white/5 p-4 space-y-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-semibold text-zinc-900 dark:text-white">Suno Advanced</h3>
+                <p className="text-xs text-zinc-400 dark:text-zinc-500 mt-0.5">More Options are sent as flat Suno generation fields.</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setSunoNegativeTags('');
+                  setSunoTask('');
+                  setSunoContinueClipId('');
+                  setSunoContinueAt('');
+                  setSunoCoverClipId('');
+                  setSunoArtistClipId('');
+                  setSunoInfillStartS('');
+                  setSunoInfillEndS('');
+                  setSunoStemTypeId('');
+                  setSunoOverrideFieldsJson('');
+                  setSunoVocalGender('');
+                  setSunoWeirdness(50);
+                  setSunoStyleInfluence(50);
+                }}
+                className="shrink-0 rounded-lg border border-zinc-200 dark:border-white/10 px-3 py-1.5 text-xs font-semibold text-zinc-600 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-white/10"
+              >
+                Advanced Default
+              </button>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-zinc-600 dark:text-zinc-400">Negative Tags</label>
+              <input
+                type="text"
+                value={sunoNegativeTags}
+                onChange={(e) => setSunoNegativeTags(e.target.value)}
+                placeholder="no autotune, no trap"
+                className="w-full bg-zinc-50 dark:bg-black/20 border border-zinc-200 dark:border-white/10 rounded-xl px-3 py-2 text-sm text-zinc-900 dark:text-white placeholder-zinc-400 dark:placeholder-zinc-600 focus:outline-none focus:border-pink-500 dark:focus:border-pink-500"
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-zinc-600 dark:text-zinc-400">Task</label>
+              <select
+                value={sunoTask}
+                onChange={(e) => setSunoTask(e.target.value)}
+                className="w-full bg-zinc-50 dark:bg-black/20 border border-zinc-200 dark:border-white/10 rounded-xl px-3 py-2 text-sm text-zinc-900 dark:text-white focus:outline-none focus:border-pink-500 dark:focus:border-pink-500 [&>option]:bg-white [&>option]:dark:bg-zinc-800"
+              >
+                <option value="">Default generation</option>
+                <option value="cover">Cover</option>
+                <option value="extend">Extend</option>
+                <option value="upload_extend">Upload Extend</option>
+                <option value="infill">Infill</option>
+                <option value="gen_stem">Generate Stem</option>
+              </select>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-xs font-medium text-zinc-600 dark:text-zinc-400">Vocal Gender</label>
+              <div className="grid grid-cols-3 gap-2 rounded-xl bg-zinc-100 dark:bg-black/20 p-1">
+                {[
+                  { value: '', label: 'Auto' },
+                  { value: 'm', label: 'Male' },
+                  { value: 'f', label: 'Female' },
+                ].map((option) => (
+                  <button
+                    key={option.label}
+                    type="button"
+                    onClick={() => setSunoVocalGender(option.value as 'm' | 'f' | '')}
+                    className={`rounded-lg px-2 py-1.5 text-xs font-semibold transition-colors ${
+                      sunoVocalGender === option.value
+                        ? 'bg-white dark:bg-zinc-800 text-zinc-900 dark:text-white shadow-sm'
+                        : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white'
+                    }`}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <EditableSlider
+                label="Weirdness"
+                value={sunoWeirdness}
+                min={0}
+                max={100}
+                step={1}
+                onChange={setSunoWeirdness}
+                formatDisplay={(val) => val === 50 ? 'Default' : `${val}`}
+                helpText="Maps to control_sliders.weirdness_constraint."
+              />
+              <EditableSlider
+                label="Style Influence"
+                value={sunoStyleInfluence}
+                min={0}
+                max={100}
+                step={1}
+                onChange={setSunoStyleInfluence}
+                formatDisplay={(val) => val === 50 ? 'Default' : `${val}`}
+                helpText="Maps to control_sliders.style_weight."
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-zinc-600 dark:text-zinc-400">Cover Clip ID</label>
+                <input
+                  type="text"
+                  value={sunoCoverClipId}
+                  onChange={(e) => setSunoCoverClipId(e.target.value)}
+                  placeholder="uploaded or library clip id"
+                  className="w-full bg-zinc-50 dark:bg-black/20 border border-zinc-200 dark:border-white/10 rounded-xl px-3 py-2 text-sm text-zinc-900 dark:text-white placeholder-zinc-400 dark:placeholder-zinc-600 focus:outline-none focus:border-pink-500 dark:focus:border-pink-500"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-zinc-600 dark:text-zinc-400">Artist Clip ID</label>
+                <input
+                  type="text"
+                  value={sunoArtistClipId}
+                  onChange={(e) => setSunoArtistClipId(e.target.value)}
+                  placeholder="artist style reference id"
+                  className="w-full bg-zinc-50 dark:bg-black/20 border border-zinc-200 dark:border-white/10 rounded-xl px-3 py-2 text-sm text-zinc-900 dark:text-white placeholder-zinc-400 dark:placeholder-zinc-600 focus:outline-none focus:border-pink-500 dark:focus:border-pink-500"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-zinc-600 dark:text-zinc-400">Continue Clip ID</label>
+                <input
+                  type="text"
+                  value={sunoContinueClipId}
+                  onChange={(e) => setSunoContinueClipId(e.target.value)}
+                  placeholder="clip id to extend"
+                  className="w-full bg-zinc-50 dark:bg-black/20 border border-zinc-200 dark:border-white/10 rounded-xl px-3 py-2 text-sm text-zinc-900 dark:text-white placeholder-zinc-400 dark:placeholder-zinc-600 focus:outline-none focus:border-pink-500 dark:focus:border-pink-500"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-zinc-600 dark:text-zinc-400">Continue At</label>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.1"
+                  value={sunoContinueAt}
+                  onChange={(e) => setSunoContinueAt(e.target.value)}
+                  placeholder="seconds"
+                  className="w-full bg-zinc-50 dark:bg-black/20 border border-zinc-200 dark:border-white/10 rounded-xl px-3 py-2 text-sm text-zinc-900 dark:text-white placeholder-zinc-400 dark:placeholder-zinc-600 focus:outline-none focus:border-pink-500 dark:focus:border-pink-500"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-3 gap-3">
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-zinc-600 dark:text-zinc-400">Infill Start</label>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.1"
+                  value={sunoInfillStartS}
+                  onChange={(e) => setSunoInfillStartS(e.target.value)}
+                  placeholder="seconds"
+                  className="w-full bg-zinc-50 dark:bg-black/20 border border-zinc-200 dark:border-white/10 rounded-xl px-3 py-2 text-sm text-zinc-900 dark:text-white placeholder-zinc-400 dark:placeholder-zinc-600 focus:outline-none focus:border-pink-500 dark:focus:border-pink-500"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-zinc-600 dark:text-zinc-400">Infill End</label>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.1"
+                  value={sunoInfillEndS}
+                  onChange={(e) => setSunoInfillEndS(e.target.value)}
+                  placeholder="seconds"
+                  className="w-full bg-zinc-50 dark:bg-black/20 border border-zinc-200 dark:border-white/10 rounded-xl px-3 py-2 text-sm text-zinc-900 dark:text-white placeholder-zinc-400 dark:placeholder-zinc-600 focus:outline-none focus:border-pink-500 dark:focus:border-pink-500"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-zinc-600 dark:text-zinc-400">Stem Type</label>
+                <input
+                  type="text"
+                  value={sunoStemTypeId}
+                  onChange={(e) => setSunoStemTypeId(e.target.value)}
+                  placeholder="optional"
+                  className="w-full bg-zinc-50 dark:bg-black/20 border border-zinc-200 dark:border-white/10 rounded-xl px-3 py-2 text-sm text-zinc-900 dark:text-white placeholder-zinc-400 dark:placeholder-zinc-600 focus:outline-none focus:border-pink-500 dark:focus:border-pink-500"
+                />
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-zinc-600 dark:text-zinc-400">Override Fields JSON</label>
+              <textarea
+                value={sunoOverrideFieldsJson}
+                onChange={(e) => setSunoOverrideFieldsJson(e.target.value)}
+                placeholder='{"key":"value"}'
+                rows={3}
+                className="w-full resize-none bg-zinc-50 dark:bg-black/20 border border-zinc-200 dark:border-white/10 rounded-xl px-3 py-2 text-xs font-mono text-zinc-900 dark:text-white placeholder-zinc-400 dark:placeholder-zinc-600 focus:outline-none focus:border-pink-500 dark:focus:border-pink-500"
+              />
+            </div>
+          </div>
+        )}
+
+        {provider === 'ace' && showAdvanced && (
           <div className="bg-white dark:bg-suno-card rounded-xl border border-zinc-200 dark:border-white/5 p-4 space-y-4">
             {/* Load Parameters from JSON */}
             <label className="flex items-center gap-2 px-3 py-2 rounded-lg border border-dashed border-zinc-300 dark:border-white/15 text-xs font-medium text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-white/5 cursor-pointer transition-colors">
@@ -2778,7 +3647,9 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
           <span>
             {isGenerating 
               ? t('generating')
-              : bulkCount > 1
+              : provider === 'suno'
+                ? 'Create with Suno'
+                : bulkCount > 1
                 ? `${t('createButton')} ${bulkCount} ${t('jobs')} (${bulkCount * batchSize} ${t('variations')})`
                 : `${t('createButton')}${batchSize > 1 ? ` (${batchSize} ${t('variations')})` : ''}`
             }
