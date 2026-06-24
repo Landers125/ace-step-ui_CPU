@@ -19,6 +19,7 @@ const __dirname = path.dirname(__filename);
 import authRoutes from './routes/auth.js';
 import songsRoutes from './routes/songs.js';
 import generateRoutes from './routes/generate.js';
+import sunoAuthRoutes from './routes/sunoAuth.js';
 import usersRoutes from './routes/users.js';
 import playlistsRoutes from './routes/playlists.js';
 import contactRoutes from './routes/contact.js';
@@ -401,6 +402,7 @@ app.get('/api/search', async (req, res) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/songs', songsRoutes);
 app.use('/api/generate', generateRoutes);
+app.use('/api/suno-auth', sunoAuthRoutes);
 app.use('/api/users', usersRoutes);
 app.use('/api/playlists', playlistsRoutes);
 app.use('/api/contact', contactRoutes);

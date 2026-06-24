@@ -51,6 +51,9 @@ function AppContent() {
 
   // Content State
   const [songs, setSongs] = useState<Song[]>([]);
+  const [selectedSunoWorkspace, setSelectedSunoWorkspace] = useState<{ id: string; name: string; baseUrl: string; apiKey?: string } | null>(null);
+  const [sunoWorkspaceSongs, setSunoWorkspaceSongs] = useState<Song[]>([]);
+  const [isLoadingSunoWorkspace, setIsLoadingSunoWorkspace] = useState(false);
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [likedSongIds, setLikedSongIds] = useState<Set<string>>(new Set());
   const [referenceTracks, setReferenceTracks] = useState<ReferenceTrack[]>([]);
@@ -145,9 +148,101 @@ function AppContent() {
     setToast({ message, type, isVisible: true });
   };
 
+  const sunoClipToSong = useCallback((clip: any): Song => {
+    const metadata = clip?.metadata || {};
+    const modelLabel = metadata?.model_badges?.songrow?.display_name ||
+      clip?.major_model_version ||
+      metadata?.major_model_version ||
+      clip?.mv ||
+      clip?.model_name ||
+      'Suno';
+    const rawAudioUrl = clip?.audio_url || clip?.audioUrl || clip?.stream_audio_url || clip?.major_model_version_audio_url;
+    const resolvedAudioUrl = getAudioUrl(rawAudioUrl, clip?.id);
+    const createdAt = clip?.created_at ? new Date(clip.created_at) : new Date();
+    const durationSeconds = Number(metadata.duration || clip?.duration || 0);
+    const duration = durationSeconds > 0
+      ? `${Math.floor(durationSeconds / 60)}:${String(Math.floor(durationSeconds % 60)).padStart(2, '0')}`
+      : '0:00';
+    const title = clip?.title || metadata.title || 'Untitled Suno Clip';
+    const tags = typeof metadata.tags === 'string'
+      ? metadata.tags.split(',').map((tag: string) => tag.trim()).filter(Boolean)
+      : ['suno'];
+
+    return {
+      id: `suno_${clip?.id || crypto.randomUUID()}`,
+      title,
+      provider: 'suno',
+      lyrics: metadata.prompt || clip?.prompt || '',
+      style: metadata.tags || clip?.tags || 'Suno',
+      coverUrl: clip?.image_url || clip?.imageUrl || clip?.cover_url || '',
+      duration,
+      createdAt,
+      tags,
+      audioUrl: resolvedAudioUrl,
+      audio_url: resolvedAudioUrl,
+      isPublic: clip?.is_public === true,
+      likeCount: clip?.upvote_count || 0,
+      viewCount: clip?.play_count || 0,
+      userId: user?.id,
+      creator: clip?.display_name || clip?.handle || clip?.user_display_name || 'Suno',
+      creator_avatar: clip?.avatar_image_url,
+      modelLabel,
+      modelName: clip?.model_name || metadata?.model_name || undefined,
+      generationParams: { provider: 'suno', externalClip: clip },
+    } as Song;
+  }, [user?.id]);
+
   const closeToast = () => {
     setToast(prev => ({ ...prev, isVisible: false }));
   };
+
+  const handleSunoWorkspaceChange = useCallback((workspace: { id: string; name: string; baseUrl: string; apiKey?: string } | null) => {
+    setSelectedSunoWorkspace(workspace);
+  }, []);
+
+  const loadSunoWorkspaceSongs = useCallback(async (options: { silent?: boolean } = {}) => {
+    if (!token || !selectedSunoWorkspace) {
+      setSunoWorkspaceSongs([]);
+      setIsLoadingSunoWorkspace(false);
+      return;
+    }
+
+    setIsLoadingSunoWorkspace(true);
+    try {
+      const result = await generateApi.getSunoProjectClips({
+        baseUrl: selectedSunoWorkspace.baseUrl,
+        apiKey: selectedSunoWorkspace.apiKey,
+        projectId: selectedSunoWorkspace.id,
+        page: 1,
+      }, token);
+      setSunoWorkspaceSongs((result.clips || []).map(sunoClipToSong));
+    } catch (error) {
+      console.error('Failed to load Suno workspace clips:', error);
+      if (!options.silent) {
+        setSunoWorkspaceSongs([]);
+        showToast(error instanceof Error ? error.message : 'Failed to load Suno workspace', 'error');
+      }
+    } finally {
+      setIsLoadingSunoWorkspace(false);
+    }
+  }, [selectedSunoWorkspace, token, sunoClipToSong]);
+
+  useEffect(() => {
+    if (!token || !selectedSunoWorkspace) {
+      setSunoWorkspaceSongs([]);
+      setIsLoadingSunoWorkspace(false);
+      return;
+    }
+
+    let cancelled = false;
+    void loadSunoWorkspaceSongs().finally(() => {
+      if (cancelled) return;
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedSunoWorkspace, token, loadSunoWorkspaceSongs]);
 
   // Show username modal if not authenticated and not loading
   useEffect(() => {
@@ -696,6 +791,18 @@ function AppContent() {
     }
   }, [token]);
 
+  const pollSunoWorkspaceAfterBrowserGenerate = useCallback(() => {
+    if (!selectedSunoWorkspace) return;
+    void loadSunoWorkspaceSongs({ silent: true });
+
+    const delays = [15000, 30000, 60000, 90000, 120000];
+    delays.forEach(delay => {
+      window.setTimeout(() => {
+        void loadSunoWorkspaceSongs({ silent: true });
+      }, delay);
+    });
+  }, [selectedSunoWorkspace, loadSunoWorkspaceSongs]);
+
   const beginPollingJob = useCallback((jobId: string, tempId: string) => {
     if (!token) return;
     if (activeJobsRef.current.has(jobId)) return;
@@ -782,6 +889,7 @@ function AppContent() {
     const tempSong: Song = {
       id: tempId,
       title: params.title || 'Generating...',
+      provider: params.provider || 'ace',
       lyrics: '',
       style: params.style,
       coverUrl: 'https://picsum.photos/200/200?blur=10',
@@ -797,7 +905,36 @@ function AppContent() {
     setShowRightSidebar(true);
 
     try {
+      if (params.provider === 'suno') {
+        const result = await generateApi.startSunoGeneration(params, token);
+        setSongs(prev => prev.filter(s => s.id !== tempId));
+        await refreshSongsList();
+
+        if ((result.external as any)?.browserAutomated || (result.external as any)?.manualBrowser) {
+          showToast((result.external as any).message || 'Cloakbrowser에서 Suno 화면 생성 처리를 시작했습니다. CAPTCHA가 표시되면 직접 완료하세요.', 'success');
+          pollSunoWorkspaceAfterBrowserGenerate();
+          if (activeJobsRef.current.size === 0) {
+            setIsGenerating(false);
+          }
+          return;
+        }
+
+        if (!result.songs || result.songs.length === 0) {
+          showToast('Suno request completed, but no audio URL was returned.', 'error');
+        }
+
+        if (window.innerWidth < 768) {
+          setMobileShowList(true);
+        }
+
+        if (activeJobsRef.current.size === 0) {
+          setIsGenerating(false);
+        }
+        return;
+      }
+
       const job = await generateApi.startGeneration({
+        provider: 'ace',
         customMode: params.customMode,
         songDescription: params.songDescription,
         lyrics: params.lyrics,
@@ -1315,6 +1452,7 @@ function AppContent() {
                 createdSongs={songs}
                 pendingAudioSelection={pendingAudioSelection}
                 onAudioSelectionApplied={() => setPendingAudioSelection(null)}
+                onSunoWorkspaceChange={handleSunoWorkspaceChange}
               />
             </div>
 
@@ -1324,11 +1462,13 @@ function AppContent() {
               flex-1 flex-col h-full overflow-hidden bg-white dark:bg-suno-DEFAULT transition-colors duration-300
             `}>
               <SongList
-                songs={songs}
+                songs={selectedSunoWorkspace ? sunoWorkspaceSongs : songs}
                 currentSong={currentSong}
                 selectedSong={selectedSong}
                 likedSongIds={likedSongIds}
                 isPlaying={isPlaying}
+                workspaceName={selectedSunoWorkspace?.name || 'My Workspace'}
+                isLoadingWorkspace={isLoadingSunoWorkspace}
                 referenceTracks={referenceTracks}
                 onPlay={playSong}
                 onSelect={(s) => {

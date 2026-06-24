@@ -124,6 +124,17 @@ CREATE TABLE IF NOT EXISTS contact_submissions (
   created_at TEXT DEFAULT (datetime('now'))
 );
 
+-- App settings table
+CREATE TABLE IF NOT EXISTS settings (
+  id TEXT PRIMARY KEY DEFAULT 'default',
+  suno_cookie TEXT,
+  suno_sid TEXT,
+  suno_jwt TEXT,
+  suno_jwt_expires_at TEXT,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now'))
+);
+
 -- Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_songs_user_id ON songs(user_id);
 CREATE INDEX IF NOT EXISTS idx_songs_created_at ON songs(created_at);
@@ -141,12 +152,24 @@ CREATE INDEX IF NOT EXISTS idx_reference_tracks_user_id ON reference_tracks(user
 CREATE INDEX IF NOT EXISTS idx_reference_tracks_created_at ON reference_tracks(created_at);
 `;
 
+function ensureColumn(table: string, column: string, definition: string): void {
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  if (!columns.some(item => item.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
+}
+
 function migrate(): void {
   console.log('Running SQLite database migrations...');
 
   try {
     // Execute the entire migration script at once
     db.exec(migrations);
+    ensureColumn('settings', 'suno_sid', 'TEXT');
+    ensureColumn('settings', 'suno_jwt', 'TEXT');
+    ensureColumn('settings', 'suno_jwt_expires_at', 'TEXT');
+    ensureColumn('settings', 'created_at', 'TEXT');
+    ensureColumn('settings', 'updated_at', 'TEXT');
     console.log('Migrations completed successfully!');
   } catch (error) {
     // Check if it's just "already exists" errors
