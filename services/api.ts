@@ -236,6 +236,8 @@ interface Comment {
 
 // Generation API
 export interface GenerationParams {
+  provider?: 'ace' | 'suno';
+
   // Mode
   customMode: boolean;
   songDescription?: string;
@@ -308,6 +310,30 @@ export interface GenerationParams {
   completeTrackClasses?: string[];
   isFormatCaption?: boolean;
   loraLoaded?: boolean;
+
+  // Suno-compatible API
+  sunoBaseUrl?: string;
+  sunoApiKey?: string;
+  sunoEndpoint?: string;
+  sunoModel?: string;
+  sunoProjectId?: string;
+  sunoProjectName?: string;
+  sunoWaitForAudio?: boolean;
+  sunoPollSeconds?: number;
+  sunoNegativeTags?: string;
+  sunoTask?: string;
+  sunoVocalGender?: 'm' | 'f' | '';
+  sunoWeirdness?: number;
+  sunoStyleInfluence?: number;
+  sunoContinueClipId?: string;
+  sunoContinueAt?: number;
+  sunoCoverClipId?: string;
+  sunoArtistClipId?: string;
+  sunoInfillStartS?: number;
+  sunoInfillEndS?: number;
+  sunoStemTypeId?: string;
+  sunoOverrideFieldsJson?: string;
+  sunoBrowserSubmit?: boolean;
 }
 
 export interface GenerationJob {
@@ -333,6 +359,54 @@ export interface GenerationJob {
 export const generateApi = {
   startGeneration: (params: GenerationParams, token: string): Promise<GenerationJob> =>
     api('/api/generate', { method: 'POST', body: params, token }),
+
+  startSunoGeneration: (params: GenerationParams, token: string): Promise<{ songs: Song[]; external?: unknown }> =>
+    api('/api/generate/suno', { method: 'POST', body: params, token }),
+
+  listSunoProjects: (params: {
+    baseUrl: string;
+    apiKey?: string;
+  }, token: string): Promise<{ projects: any[]; raw: unknown }> =>
+    api('/api/generate/suno/projects/list', { method: 'POST', body: params, token }),
+
+  createSunoProject: (params: {
+    baseUrl: string;
+    apiKey?: string;
+    name: string;
+  }, token: string): Promise<{ project: any; raw: unknown }> =>
+    api('/api/generate/suno/projects', { method: 'POST', body: params, token }),
+
+  getSunoProjectClips: (params: {
+    baseUrl: string;
+    apiKey?: string;
+    projectId: string;
+    page?: number;
+    query?: string;
+  }, token: string): Promise<{ project: any; clips: any[]; raw: unknown }> =>
+    api('/api/generate/suno/projects/clips', { method: 'POST', body: params, token }),
+
+  addSunoClipsToProject: (params: {
+    baseUrl: string;
+    apiKey?: string;
+    projectId: string;
+    clipIds: string[];
+  }, token: string): Promise<{ raw: unknown }> =>
+    api('/api/generate/suno/projects/add-clips', { method: 'POST', body: params, token }),
+
+  removeSunoClipsFromProject: (params: {
+    baseUrl: string;
+    apiKey?: string;
+    projectId: string;
+    clipIds: string[];
+  }, token: string): Promise<{ raw: unknown }> =>
+    api('/api/generate/suno/projects/remove-clips', { method: 'POST', body: params, token }),
+
+  personalizeSunoStyle: (params: {
+    baseUrl: string;
+    apiKey?: string;
+    tags: string;
+  }, token: string): Promise<{ style: string; raw: unknown }> =>
+    api('/api/generate/suno/upsample-tags', { method: 'POST', body: params, token }),
 
   getStatus: (jobId: string, token: string): Promise<GenerationJob> =>
     api(`/api/generate/status/${jobId}`, { token }),
@@ -418,6 +492,44 @@ export const generateApi = {
     scale: number;
     path: string;
   }> => api('/api/lora/status', { token }),
+};
+
+export interface SunoAuthStatus {
+  hasCookie: boolean;
+  hasClientCookie?: boolean;
+  hasSessionCookie?: boolean;
+  isSessionValid?: boolean | null;
+  expiresAt?: string | null;
+  userId?: string | null;
+  email?: string | null;
+  hasJwt?: boolean;
+  jwtExpiresAt?: string | null;
+  cdp?: {
+    running: boolean;
+    cdpUrl: string;
+    launched?: boolean;
+    version?: unknown;
+  };
+}
+
+export const sunoAuthApi = {
+  getChromeCdp: (token: string): Promise<{ running: boolean; cdpUrl: string; version?: unknown }> =>
+    api('/api/suno-auth/chrome-cdp', { token }),
+
+  startChromeCdp: (token: string): Promise<{ running: boolean; launched?: boolean; cdpUrl: string; version?: unknown }> =>
+    api('/api/suno-auth/chrome-cdp', { method: 'POST', token }),
+
+  getStatus: (token: string): Promise<SunoAuthStatus> =>
+    api('/api/suno-auth/login', { token }),
+
+  importFromChrome: (token: string): Promise<SunoAuthStatus & { success: boolean }> =>
+    api('/api/suno-auth/login', { method: 'POST', token }),
+
+  saveCookie: (cookie: string, token: string): Promise<SunoAuthStatus & { success: boolean }> =>
+    api('/api/suno-auth/cookie', { method: 'POST', body: { cookie }, token }),
+
+  refreshJwt: (token: string): Promise<{ success: boolean; hasJwt: boolean; expiresAt?: string | null; userId?: string | null; email?: string | null }> =>
+    api('/api/suno-auth/refresh', { method: 'POST', token }),
 };
 
 // Users API

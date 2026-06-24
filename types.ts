@@ -3,6 +3,7 @@ export interface Song {
   title: string;
   lyrics: string;
   style: string;
+  provider?: 'ace' | 'suno';
   coverUrl: string;
   duration: string;
   createdAt: Date;
@@ -20,6 +21,8 @@ export interface Song {
   creator?: string;
   creator_avatar?: string;
   ditModel?: string;
+  modelLabel?: string;
+  modelName?: string;
 }
 
 export interface Playlist {
@@ -48,6 +51,8 @@ export interface Comment {
 }
 
 export interface GenerationParams {
+  provider?: 'ace' | 'suno';
+
   // Mode
   customMode: boolean;
 
@@ -120,6 +125,30 @@ export interface GenerationParams {
   trackName?: string;
   completeTrackClasses?: string[];
   isFormatCaption?: boolean;
+
+  // Suno-compatible API
+  sunoBaseUrl?: string;
+  sunoApiKey?: string;
+  sunoEndpoint?: string;
+  sunoModel?: string;
+  sunoProjectId?: string;
+  sunoProjectName?: string;
+  sunoWaitForAudio?: boolean;
+  sunoPollSeconds?: number;
+  sunoNegativeTags?: string;
+  sunoTask?: string;
+  sunoVocalGender?: 'm' | 'f' | '';
+  sunoWeirdness?: number;
+  sunoStyleInfluence?: number;
+  sunoContinueClipId?: string;
+  sunoContinueAt?: number;
+  sunoCoverClipId?: string;
+  sunoArtistClipId?: string;
+  sunoInfillStartS?: number;
+  sunoInfillEndS?: number;
+  sunoStemTypeId?: string;
+  sunoOverrideFieldsJson?: string;
+  sunoBrowserSubmit?: boolean;
 }
 
 export interface PlayerState {
